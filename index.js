@@ -110,7 +110,7 @@ function requestAsEventEmitter(opts) {
 			ee.emit('error', new got.RequestError(err, opts));
 		});
 
-		if (opts.gotTimeout) {
+		if (opts.gotTimeout && (opts.gotTimeout.socket || opts.gotTimeout.connect)) {
 			timedOut(req, opts.gotTimeout);
 		}
 
@@ -126,9 +126,15 @@ function requestAsEventEmitter(opts) {
 }
 
 function asPromise(opts) {
-	const timeoutFn = requestPromise => opts.gotTimeout && opts.gotTimeout.request ?
-		pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts)) :
-		requestPromise;
+	const timeoutFn = requestPromise => {
+		if (opts.gotTimeout && opts.gotTimeout.request) {
+			console.log('GOT TIMEOUT', opts.gotTimeout);
+			return pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts));
+		}
+
+		console.log('GOT NO TIMEOUT');
+		return requestPromise;
+	};
 
 	return timeoutFn(new PCancelable((onCancel, resolve, reject) => {
 		const ee = requestAsEventEmitter(opts);
@@ -164,7 +170,10 @@ function asPromise(opts) {
 			stream
 				.catch(err => reject(new got.ReadError(err, opts)))
 				.then(data => {
-					console.log(`GOT STREAM END. data: ${data.substr(0, 50)}`);
+					if (typeof data === 'string') {
+						console.log(`GOT STREAM END. data: ${data.substr(0, 50)}`);
+					}
+
 					const statusCode = res.statusCode;
 					const limitStatusCode = opts.followRedirect ? 299 : 399;
 
@@ -393,10 +402,7 @@ function normalizeArguments(url, opts) {
 
 function got(url, opts) {
 	try {
-		return asPromise(normalizeArguments(url, opts)).then(res => {
-			console.log('GOT PROMISE RESOLVED', res.statusCode);
-			return res;
-		});
+		return asPromise(normalizeArguments(url, opts));
 	} catch (err) {
 		return Promise.reject(err);
 	}
