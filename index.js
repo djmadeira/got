@@ -144,6 +144,7 @@ function asPromise(opts) {
 			}
 
 			onCancel(() => {
+				console.log('GOT REQUEST CANCELLED');
 				req.abort();
 			});
 
@@ -157,11 +158,13 @@ function asPromise(opts) {
 		});
 
 		ee.on('response', res => {
+			console.log(`GOT RESPONSE. isStream: ${isStream(res)}, type: ${typeof res}`);
 			const stream = opts.encoding === null ? getStream.buffer(res) : getStream(res, opts);
 
 			stream
 				.catch(err => reject(new got.ReadError(err, opts)))
 				.then(data => {
+					console.log(`GOT STREAM END. data: ${data.substr(0, 50)}`);
 					const statusCode = res.statusCode;
 					const limitStatusCode = opts.followRedirect ? 299 : 399;
 
@@ -181,6 +184,7 @@ function asPromise(opts) {
 						throw new got.HTTPError(statusCode, res.headers, opts);
 					}
 
+					console.log(`GOT REQUEST ABOUT TO RESOLVE. res:`, res);
 					resolve(res);
 				})
 				.catch(err => {
