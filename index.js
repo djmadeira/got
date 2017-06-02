@@ -393,7 +393,10 @@ function normalizeArguments(url, opts) {
 
 function got(url, opts) {
 	try {
-		return asPromise(normalizeArguments(url, opts));
+		return asPromise(normalizeArguments(url, opts)).then(res => {
+			console.log('GOT PROMISE RESOLVED', res.statusCode);
+			return res;
+		});
 	} catch (err) {
 		return Promise.reject(err);
 	}
