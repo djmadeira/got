@@ -268,7 +268,11 @@ function asPromise(opts) {
 	const timeoutFn = requestPromise => {
 		if (opts.gotTimeout && opts.gotTimeout.request) {
 			log.info('USING p-timeout');
-			return pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts));
+			return pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts))
+				.then(res => {
+					log.info('resolves');
+					return res;
+				});
 		}
 
 		log.info('NO TIMEOUT SUPPLIED');
@@ -345,6 +349,9 @@ function asPromise(opts) {
 		});
 
 		ee.on('error', reject);
+	}).then(res => {
+		log.info(`resolves p-cancelable, ${typeof res}`);
+		return res;
 	}));
 }
 
