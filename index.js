@@ -5,6 +5,7 @@ const https = require('https');
 const PassThrough = require('stream').PassThrough;
 const urlLib = require('url');
 const querystring = require('querystring');
+const createLogger = require('logging').default;
 const duplexer3 = require('duplexer3');
 const isStream = require('is-stream');
 const getStream = require('get-stream');
@@ -16,11 +17,92 @@ const isRetryAllowed = require('is-retry-allowed');
 const Buffer = require('safe-buffer').Buffer;
 const isURL = require('isurl');
 const isPlainObj = require('is-plain-obj');
-const PCancelable = require('p-cancelable');
 const pkg = require('./package');
 
 const getMethodRedirectCodes = new Set([300, 301, 302, 303, 304, 305, 307, 308]);
 const allMethodRedirectCodes = new Set([300, 303, 307, 308]);
+
+class CancelError extends Error {
+	constructor() {
+		super('Promise was canceled');
+		this.name = 'CancelError';
+	}
+}
+
+class PCancelable extends Promise {
+	static fn(fn) {
+		this.log.info('fn called');
+		return function () {
+			const args = [].slice.apply(arguments);
+			return new PCancelable((onCancel, resolve, reject) => {
+				args.unshift(onCancel);
+				fn.apply(null, args).then(resolve, reject);
+			});
+		};
+	}
+
+	constructor(executor) {
+		super(resolve => {
+			console.log('p-cancelable resolve with undefined');
+			resolve();
+		});
+
+		this.log = createLogger('p-cancelable');
+
+		this._pending = true;
+		this._canceled = false;
+
+		this._promise = new Promise((resolve, reject) => {
+			this._reject = reject;
+
+			return executor(
+				fn => {
+					this._cancel = fn;
+				},
+				val => {
+					this._pending = false;
+					this.log.info(`resolving with ${typeof val}`);
+					resolve(val);
+				},
+				err => {
+					this._pending = false;
+					reject(err);
+				}
+			);
+		});
+	}
+
+	then() {
+		this.log.info('.then called');
+		return this._promise.then.apply(this._promise, arguments);
+	}
+
+	catch() {
+		return this._promise.catch.apply(this._promise, arguments);
+	}
+
+	cancel() {
+		this.log.info('cancelled!!');
+		if (!this._pending || this._canceled) {
+			return;
+		}
+
+		if (typeof this._cancel === 'function') {
+			try {
+				this._cancel();
+			} catch (err) {
+				this._reject(err);
+			}
+		}
+
+		this._canceled = true;
+		this._reject(new CancelError());
+	}
+
+	get canceled() {
+		return this._canceled;
+	}
+}
 
 class TimeoutError extends Error {
 	constructor(message) {
@@ -30,16 +112,18 @@ class TimeoutError extends Error {
 }
 
 const pTimeout = (promise, ms, fallback) => new Promise((resolve, reject) => {
+	const log = createLogger('p-timeout');
+
 	if (typeof ms !== 'number' && ms >= 0) {
 		throw new TypeError('Expected `ms` to be a positive number');
 	}
 
 	const timer = setTimeout(() => {
-		console.log('p-timeout timeout', fallback);
+		log.info('p-timeout timeout', fallback);
 
 		if (typeof fallback === 'function') {
 			const res = fallback();
-			console.log(`p-timeout resolving with fallback ${res}`);
+			log.info(`p-timeout resolving with fallback ${res}`);
 			resolve(res);
 			return;
 		}
@@ -47,18 +131,18 @@ const pTimeout = (promise, ms, fallback) => new Promise((resolve, reject) => {
 		const message = typeof fallback === 'string' ? fallback : `Promise timed out after ${ms} milliseconds`;
 		const err = fallback instanceof Error ? fallback : new TimeoutError(message);
 
-		console.log('p-timeout about to reject', err);
+		log.info('p-timeout about to reject', err);
 		reject(err);
 	}, ms);
 
 	promise.then(
 		val => {
-			console.log('p-timeout resolve');
+			log.info('p-timeout resolve');
 			clearTimeout(timer);
 			resolve(val);
 		},
 		err => {
-			console.log('p-timeout reject');
+			log.info('p-timeout reject');
 			clearTimeout(timer);
 			reject(err);
 		}
@@ -179,13 +263,15 @@ function requestAsEventEmitter(opts) {
 }
 
 function asPromise(opts) {
+	const log = createLogger(opts.path);
+
 	const timeoutFn = requestPromise => {
 		if (opts.gotTimeout && opts.gotTimeout.request) {
-			console.log('USING p-timeout');
+			log.info('USING p-timeout');
 			return pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts));
 		}
 
-		console.log('NO TIMEOUT SUPPLIED');
+		log.info('NO TIMEOUT SUPPLIED');
 		return requestPromise;
 	};
 
@@ -199,12 +285,12 @@ function asPromise(opts) {
 
 		ee.on('request', req => {
 			if (cancelOnRequest) {
-				console.log('REQUEST CANCELLED BEFORE START');
+				log.info('REQUEST CANCELLED BEFORE START');
 				req.abort();
 			}
 
 			onCancel(() => {
-				console.log('REQUEST CANCELLED');
+				log.info('REQUEST CANCELLED');
 				req.abort();
 			});
 
@@ -224,9 +310,9 @@ function asPromise(opts) {
 				.catch(err => reject(new got.ReadError(err, opts)))
 				.then(data => {
 					if (typeof data === 'string') {
-						console.log('STREAM RESOLVED', data);
+						log.info('STREAM RESOLVED', data);
 					} else {
-						console.log(`STREAM RESOLVED WITH ${typeof data}`);
+						log.info(`STREAM RESOLVED WITH ${typeof data}`);
 					}
 
 					const statusCode = res.statusCode;
@@ -248,11 +334,11 @@ function asPromise(opts) {
 						throw new got.HTTPError(statusCode, res.headers, opts);
 					}
 
-					console.log('GOT ABOUT TO RESOLVE', statusCode);
+					log.info('GOT ABOUT TO RESOLVE', statusCode);
 					resolve(res);
 				})
 				.catch(err => {
-					console.log('GOT RESPONSE STREAM FAILED');
+					log.info('GOT RESPONSE STREAM FAILED');
 					Object.defineProperty(err, 'response', {value: res});
 					reject(err);
 				});
