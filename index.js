@@ -17,11 +17,53 @@ const Buffer = require('safe-buffer').Buffer;
 const isURL = require('isurl');
 const isPlainObj = require('is-plain-obj');
 const PCancelable = require('p-cancelable');
-const pTimeout = require('p-timeout');
 const pkg = require('./package');
 
 const getMethodRedirectCodes = new Set([300, 301, 302, 303, 304, 305, 307, 308]);
 const allMethodRedirectCodes = new Set([300, 303, 307, 308]);
+
+class TimeoutError extends Error {
+	constructor(message) {
+		super(message);
+		this.name = 'TimeoutError';
+	}
+}
+
+const pTimeout = (promise, ms, fallback) => new Promise((resolve, reject) => {
+	if (typeof ms !== 'number' && ms >= 0) {
+		throw new TypeError('Expected `ms` to be a positive number');
+	}
+
+	const timer = setTimeout(() => {
+		console.log('p-timeout timeout', fallback);
+
+		if (typeof fallback === 'function') {
+			const res = fallback();
+			console.log(`p-timeout resolving with fallback ${res}`);
+			resolve(res);
+			return;
+		}
+
+		const message = typeof fallback === 'string' ? fallback : `Promise timed out after ${ms} milliseconds`;
+		const err = fallback instanceof Error ? fallback : new TimeoutError(message);
+
+		console.log('p-timeout about to reject', err);
+		reject(err);
+	}, ms);
+
+	promise.then(
+		val => {
+			console.log('p-timeout resolve');
+			clearTimeout(timer);
+			resolve(val);
+		},
+		err => {
+			console.log('p-timeout reject');
+			clearTimeout(timer);
+			reject(err);
+		}
+	);
+});
 
 function requestAsEventEmitter(opts) {
 	opts = opts || {};
@@ -47,6 +89,7 @@ function requestAsEventEmitter(opts) {
 
 		const req = fn.request(opts, res => {
 			const statusCode = res.statusCode;
+			console.log('GOT REQUEST RESOLVED', statusCode);
 
 			res.url = redirectUrl || requestUrl;
 			res.requestUrl = requestUrl;
@@ -77,6 +120,7 @@ function requestAsEventEmitter(opts) {
 
 				const redirectOpts = Object.assign({}, opts, urlLib.parse(redirectUrl));
 
+				console.log('redirecting', redirectUrl);
 				ee.emit('redirect', res, redirectOpts);
 
 				get(redirectOpts);
@@ -85,11 +129,19 @@ function requestAsEventEmitter(opts) {
 			}
 
 			setImmediate(() => {
-				const response = opts.decompress === true &&
+				let response;
+				if (opts.decompress === true &&
 					typeof decompressResponse === 'function' &&
-					req.method !== 'HEAD' ? decompressResponse(res) : res;
+					req.method !== 'HEAD') {
+					response = decompressResponse(res);
+					console.log('DECOMPRESSED RESPONSE');
+				} else {
+					console.log('RESPONSE REQUIRED NO DECOMPRESSION');
+					response = res;
+				}
 
 				if (!opts.decompress && ['gzip', 'deflate'].indexOf(res.headers['content-encoding']) !== -1) {
+					console.log('I HAVE NO IDEA WHAT THIS CODE DOES');
 					opts.encoding = null;
 				}
 
@@ -111,6 +163,7 @@ function requestAsEventEmitter(opts) {
 		});
 
 		if (opts.gotTimeout && (opts.gotTimeout.socket || opts.gotTimeout.connect)) {
+			console.log('timed-out IS GETTING IN THE MIX', opts.gotTimeout);
 			timedOut(req, opts.gotTimeout);
 		}
 
@@ -128,9 +181,11 @@ function requestAsEventEmitter(opts) {
 function asPromise(opts) {
 	const timeoutFn = requestPromise => {
 		if (opts.gotTimeout && opts.gotTimeout.request) {
+			console.log('USING p-timeout');
 			return pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts));
 		}
 
+		console.log('NO TIMEOUT SUPPLIED');
 		return requestPromise;
 	};
 
@@ -144,10 +199,12 @@ function asPromise(opts) {
 
 		ee.on('request', req => {
 			if (cancelOnRequest) {
+				console.log('REQUEST CANCELLED BEFORE START');
 				req.abort();
 			}
 
 			onCancel(() => {
+				console.log('REQUEST CANCELLED');
 				req.abort();
 			});
 
@@ -166,6 +223,12 @@ function asPromise(opts) {
 			stream
 				.catch(err => reject(new got.ReadError(err, opts)))
 				.then(data => {
+					if (typeof data === 'string') {
+						console.log('STREAM RESOLVED', data);
+					} else {
+						console.log(`STREAM RESOLVED WITH ${typeof data}`);
+					}
+
 					const statusCode = res.statusCode;
 					const limitStatusCode = opts.followRedirect ? 299 : 399;
 
@@ -185,9 +248,11 @@ function asPromise(opts) {
 						throw new got.HTTPError(statusCode, res.headers, opts);
 					}
 
+					console.log('GOT ABOUT TO RESOLVE', statusCode);
 					resolve(res);
 				})
 				.catch(err => {
+					console.log('GOT RESPONSE STREAM FAILED');
 					Object.defineProperty(err, 'response', {value: res});
 					reject(err);
 				});
@@ -388,13 +453,16 @@ function normalizeArguments(url, opts) {
 		delete opts.timeout;
 	}
 
+	console.log('GOT OPTIONS', opts);
 	return opts;
 }
 
 function got(url, opts) {
 	try {
+		console.log('GOT REQUESTING AS PROMISE');
 		return asPromise(normalizeArguments(url, opts));
 	} catch (err) {
+		console.log('FAILED TO CONSTRUCT PROMISE');
 		return Promise.reject(err);
 	}
 }
