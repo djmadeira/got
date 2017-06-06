@@ -16,12 +16,87 @@ const isRetryAllowed = require('is-retry-allowed');
 const Buffer = require('safe-buffer').Buffer;
 const isURL = require('isurl');
 const isPlainObj = require('is-plain-obj');
-const PCancelable = require('p-cancelable');
 const pTimeout = require('p-timeout');
 const pkg = require('./package');
 
 const getMethodRedirectCodes = new Set([300, 301, 302, 303, 304, 305, 307, 308]);
 const allMethodRedirectCodes = new Set([300, 303, 307, 308]);
+
+class CancelError extends Error {
+	constructor() {
+		super('Promise was canceled');
+		this.name = 'CancelError';
+	}
+}
+
+class PCancelable extends Promise {
+	static fn(fn) {
+		return function () {
+			const args = [].slice.apply(arguments);
+			return new PCancelable((onCancel, resolve, reject) => {
+				args.unshift(onCancel);
+				fn.apply(null, args).then(resolve, reject);
+			});
+		};
+	}
+
+	constructor(executor) {
+		super(resolve => {
+			resolve(new Error('you dumb mfer'));
+		});
+
+		this._pending = true;
+		this._canceled = false;
+
+		this._promise = new Promise((resolve, reject) => {
+			this._reject = reject;
+
+			return executor(
+				fn => {
+					this._cancel = fn;
+				},
+				val => {
+					this._pending = false;
+					console.log('cancelable just resolved', val);
+					resolve(val);
+				},
+				err => {
+					this._pending = false;
+					reject(err);
+				}
+			);
+		});
+	}
+
+	then() {
+		return this._promise.then.apply(this._promise, arguments);
+	}
+
+	catch() {
+		return this._promise.catch.apply(this._promise, arguments);
+	}
+
+	cancel() {
+		if (!this._pending || this._canceled) {
+			return;
+		}
+
+		if (typeof this._cancel === 'function') {
+			try {
+				this._cancel();
+			} catch (err) {
+				this._reject(err);
+			}
+		}
+
+		this._canceled = true;
+		this._reject(new CancelError());
+	}
+
+	get canceled() {
+		return this._canceled;
+	}
+}
 
 function requestAsEventEmitter(opts) {
 	opts = opts || {};
