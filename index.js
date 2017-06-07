@@ -16,7 +16,6 @@ const isRetryAllowed = require('is-retry-allowed');
 const Buffer = require('safe-buffer').Buffer;
 const isURL = require('isurl');
 const isPlainObj = require('is-plain-obj');
-const PCancelable = require('p-cancelable');
 const pTimeout = require('p-timeout');
 const pkg = require('./package');
 
@@ -130,23 +129,10 @@ function asPromise(opts) {
 		pTimeout(requestPromise, opts.gotTimeout.request, new got.RequestError({message: 'Request timed out', code: 'ETIMEDOUT'}, opts)) :
 		requestPromise;
 
-	return timeoutFn(new PCancelable((onCancel, resolve, reject) => {
+	return timeoutFn(new Promise((resolve, reject) => {
 		const ee = requestAsEventEmitter(opts);
-		let cancelOnRequest = false;
-
-		onCancel(() => {
-			cancelOnRequest = true;
-		});
 
 		ee.on('request', req => {
-			if (cancelOnRequest) {
-				req.abort();
-			}
-
-			onCancel(() => {
-				req.abort();
-			});
-
 			if (isStream(opts.body)) {
 				opts.body.pipe(req);
 				opts.body = undefined;
